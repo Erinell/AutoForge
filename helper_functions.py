@@ -1,18 +1,11 @@
-
 import json
 import os
 import uuid
 
-import configargparse
-import cv2
-import jax
-import jax.numpy as jnp
-import jax.random as random
-import optax
+import torch
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
-import math
-from tqdm import tqdm
 import pandas as pd
 
 import os
@@ -21,9 +14,6 @@ import pandas as pd
 import numpy as np
 
 import struct
-
-
-
 
 
 def generate_stl(height_map, filename, background_height, scale=1.0):
@@ -122,11 +112,11 @@ def generate_stl(height_map, filename, background_height, scale=1.0):
             else:
                 normal = normal / norm
             f.write(struct.pack('<12fH',
-                                  normal[0], normal[1], normal[2],
-                                  v1[0], v1[1], v1[2],
-                                  v2[0], v2[1], v2[2],
-                                  v3[0], v3[1], v3[2],
-                                  0))
+                                normal[0], normal[1], normal[2],
+                                v1[0], v1[1], v1[2],
+                                v2[0], v2[1], v2[2],
+                                v3[0], v3[1], v3[2],
+                                0))
 
 
 
@@ -135,8 +125,8 @@ def generate_swap_instructions(discrete_global, discrete_height_image, h, backgr
     Generate swap instructions based on discrete material assignments.
 
     Args:
-        discrete_global (jnp.ndarray): Array of discrete global material assignments.
-        discrete_height_image (jnp.ndarray): Array representing the discrete height image.
+        discrete_global (np.ndarray): Array of discrete global material assignments.
+        discrete_height_image (np.ndarray): Array representing the discrete height image.
         h (float): Layer thickness.
         background_layers (int): Number of background layers.
         background_height (float): Height of the background in mm.
@@ -163,24 +153,23 @@ def initialize_pixel_height_logits(target):
     """
     Initialize pixel height logits based on the luminance of the target image.
 
-    Assumes target is a jnp.array of shape (H, W, 3) in the range [0, 255].
+    Assumes target is a Tensor of shape (H, W, 3) in the range [0, 255].
     Uses the formula: L = 0.299*R + 0.587*G + 0.114*B.
 
     Args:
-        target (jnp.ndarray): The target image array with shape (H, W, 3).
+        target (Tensor): The target image array with shape (H, W, 3).
 
     Returns:
-        jnp.ndarray: The initialized pixel height logits.
+        Tensor: The initialized pixel height logits.
     """
+
     # Compute normalized luminance in [0,1]
     normalized_lum = (0.299 * target[..., 0] +
                       0.587 * target[..., 1] +
                       0.114 * target[..., 2]) / 255.0
     # To avoid log(0) issues, add a small epsilon.
     eps = 1e-6
-    # Convert normalized luminance to logits using the inverse sigmoid (logit) function.
-    # This ensures that jax.nn.sigmoid(pixel_height_logits) approximates normalized_lum.
-    pixel_height_logits = jnp.log((normalized_lum + eps) / (1 - normalized_lum + eps))
+    pixel_height_logits = torch.log((normalized_lum + eps) / (1 - normalized_lum + eps))
     return pixel_height_logits
 
 
@@ -208,8 +197,8 @@ def extract_filament_swaps(disc_global, disc_height_image, background_layers):
     values (which indicate at which layer the material change occurs).
 
     Args:
-        disc_global (jnp.ndarray): Discrete global material assignments.
-        disc_height_image (jnp.ndarray): Discrete height image.
+        disc_global (np.ndarray): Discrete global material assignments.
+        disc_height_image (np.ndarray): Discrete height image.
         background_layers (int): Number of background layers.
 
     Returns:
@@ -230,11 +219,6 @@ def extract_filament_swaps(disc_global, disc_height_image, background_layers):
             slider_values.append(slider)
             filament_indices.append(prev)
         prev = current
-    # Add the last material index
-    filament_indices.append(prev)
-    slider = i + background_layers
-    slider_values.append(slider)
-
     return filament_indices, slider_values
 
 
@@ -252,8 +236,8 @@ def generate_project_file(project_filename, args, disc_global, disc_height_image
     Args:
         project_filename (str): Path to the output project file.
         args (Namespace): Command-line arguments containing printing parameters.
-        disc_global (jnp.ndarray): Discrete global material assignments.
-        disc_height_image (jnp.ndarray): Discrete height image.
+        disc_global (np.ndarray): Discrete global material assignments.
+        disc_height_image (np.ndarray): Discrete height image.
         width_mm (float): Width of the model in millimeters.
         height_mm (float): Height of the model in millimeters.
         stl_filename (str): Path to the STL file.
@@ -388,8 +372,8 @@ def load_materials(csv_filename):
 
     Returns:
         tuple: A tuple containing:
-            - material_colors (jnp.ndarray): Array of material colors in float64.
-            - material_TDs (jnp.ndarray): Array of material transmission/opacity parameters in float64.
+            - material_colors (Tensor): Array of material colors in float64.
+            - material_TDs (Tensor): Array of material transmission/opacity parameters in float64.
             - material_names (list): List of material names.
             - colors_list (list): List of color hex strings.
     """
@@ -398,41 +382,9 @@ def load_materials(csv_filename):
     material_TDs = (df[' TD'].astype(float)).to_numpy()
     colors_list = df[' Color'].tolist()
     # Use float64 for material colors.
-    material_colors = jnp.array([hex_to_rgb(color) for color in colors_list], dtype=jnp.float64)
-    material_TDs = jnp.array(material_TDs, dtype=jnp.float64)
+    material_colors = torch.tensor([hex_to_rgb(color) for color in colors_list], dtype=torch.float64)
+    material_TDs = torch.tensor(material_TDs, dtype=torch.float64)
     return material_colors, material_TDs, material_names, colors_list
-
-
-def sample_gumbel(shape, key, eps=1e-20):
-    """
-    Sample from a Gumbel distribution.
-
-    Args:
-        shape (tuple): The shape of the output array.
-        key (jax.random.PRNGKey): The random key for JAX operations.
-        eps (float, optional): A small value to avoid numerical issues. Defaults to 1e-20.
-
-    Returns:
-        jnp.ndarray: Samples from the Gumbel distribution.
-    """
-    U = random.uniform(key, shape=shape, minval=0.0, maxval=1.0)
-    return -jnp.log(-jnp.log(U + eps) + eps)
-
-
-def gumbel_softmax_sample(logits, temperature, key):
-    """
-    Sample from the Gumbel-Softmax distribution.
-
-    Args:
-        logits (jnp.ndarray): The input logits for the Gumbel-Softmax.
-        temperature (float): The temperature parameter for the Gumbel-Softmax.
-        key (jax.random.PRNGKey): The random key for JAX operations.
-
-    Returns:
-        jnp.ndarray: The Gumbel-Softmax samples.
-    """
-    g = sample_gumbel(logits.shape, key)
-    return jax.nn.softmax((logits + g) / temperature)
 
 
 def gumbel_softmax(logits, temperature, key, hard=False):
@@ -440,18 +392,18 @@ def gumbel_softmax(logits, temperature, key, hard=False):
     Compute the Gumbel-Softmax.
 
     Args:
-        logits (jnp.ndarray): The input logits for the Gumbel-Softmax.
+        logits (Tensor): The input logits for the Gumbel-Softmax.
         temperature (float): The temperature parameter for the Gumbel-Softmax.
-        key (jax.random.PRNGKey): The random key for JAX operations.
         hard (bool, optional): If True, return hard one-hot encoded samples. Defaults to False.
 
     Returns:
-        jnp.ndarray: The Gumbel-Softmax samples.
+        Tensor: The Gumbel-Softmax samples.
     """
-    y = gumbel_softmax_sample(logits, temperature, key)
+    
+    y = F.softmax((logits + key) / temperature, dim=-1)
     if hard:
-        y_hard = jax.nn.one_hot(jnp.argmax(y, axis=-1), logits.shape[-1])
-        y = y_hard + jax.lax.stop_gradient(y - y_hard)
+        y_hard = torch.zeros_like(y).scatter_(-1, torch.argmax(y, dim=-1, keepdim=True), 1.0)
+        y = y_hard + (y - y_hard).detach()
     return y
 
 
@@ -460,22 +412,23 @@ def srgb_to_linear_lab(rgb):
     Convert sRGB (range [0,1]) to linear RGB.
 
     Args:
-        rgb (jnp.ndarray): A JAX array of shape (..., 3) representing the sRGB values.
+        rgb (Tensor): A Tensor array of shape (..., 3) representing the sRGB values.
 
     Returns:
-        jnp.ndarray: A JAX array of shape (..., 3) representing the linear RGB values.
+        Tensor: A Tensor array of shape (..., 3) representing the linear RGB values.
     """
-    return jnp.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    return torch.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+
 
 def linear_to_xyz(rgb_linear):
     """
     Convert linear RGB to XYZ using sRGB D65.
 
     Args:
-        rgb_linear (jnp.ndarray): A JAX array of shape (..., 3) representing the linear RGB values.
+        rgb_linear (Tensor): A Tensor array of shape (..., 3) representing the linear RGB values.
 
     Returns:
-        jnp.ndarray: A JAX array of shape (..., 3) representing the XYZ values.
+        Tensor: A Tensor array of shape (..., 3) representing the XYZ values.
     """
     R = rgb_linear[..., 0]
     G = rgb_linear[..., 1]
@@ -483,7 +436,7 @@ def linear_to_xyz(rgb_linear):
     X = 0.4124564 * R + 0.3575761 * G + 0.1804375 * B
     Y = 0.2126729 * R + 0.7151522 * G + 0.0721750 * B
     Z = 0.0193339 * R + 0.1191920 * G + 0.9503041 * B
-    return jnp.stack([X, Y, Z], axis=-1)
+    return torch.stack([X, Y, Z], dim=-1)
 
 
 def xyz_to_lab(xyz):
@@ -491,20 +444,19 @@ def xyz_to_lab(xyz):
     Convert XYZ to CIELAB. Assumes D65 reference white.
 
     Args:
-        xyz (jnp.ndarray): A JAX array of shape (..., 3) representing the XYZ values.
+        xyz (Tensor): A Tensor array of shape (..., 3) representing the XYZ values.
 
     Returns:
-        jnp.ndarray: A JAX array of shape (..., 3) representing the CIELAB values.
+        Tensor: A Tensor array of shape (..., 3) representing the CIELAB values.
     """
-    # Reference white for D65:
-    xyz_ref = jnp.array([0.95047, 1.0, 1.08883])
+    xyz_ref = torch.tensor([0.95047, 1.0, 1.08883], dtype=xyz.dtype, device=xyz.device)
     xyz = xyz / xyz_ref
     delta = 6/29
-    f = jnp.where(xyz > delta**3, xyz ** (1/3), (xyz / (3 * delta**2)) + (4/29))
+    f = torch.where(xyz > delta**3, xyz ** (1/3), (xyz / (3 * delta**2)) + (4/29))
     L = 116 * f[..., 1] - 16
     a = 500 * (f[..., 0] - f[..., 1])
     b = 200 * (f[..., 1] - f[..., 2])
-    return jnp.stack([L, a, b], axis=-1)
+    return torch.stack([L, a, b], dim=-1)
 
 
 def rgb_to_lab(rgb):
@@ -512,10 +464,10 @@ def rgb_to_lab(rgb):
     Convert an sRGB image (values in [0,1]) to CIELAB.
 
     Args:
-        rgb (jnp.ndarray): A JAX array of shape (..., 3) representing the sRGB values.
+        rgb (Tensor): A Tensor array of shape (..., 3) representing the sRGB values.
 
     Returns:
-        jnp.ndarray: A JAX array of shape (..., 3) representing the CIELAB values.
+        Tensor: A Tensor array of shape (..., 3) representing the CIELAB values.
     """
     rgb_linear = srgb_to_linear_lab(rgb)
     xyz = linear_to_xyz(rgb_linear)
@@ -539,7 +491,7 @@ def adaptive_round(x, tau, high_tau=1.0, low_tau=0.01, temp=0.1):
         temp (float, optional): A temperature parameter for interpolation. Defaults to 0.1.
 
     Returns:
-        jnp.ndarray: The adaptively rounded array.
+        Tensor: The adaptively rounded array.
     """
-    beta = jnp.clip((high_tau - tau) / (high_tau - low_tau), 0.0, 1.0)
-    return (1 - beta) * x + beta * jnp.round(x)
+    beta = np.clip((high_tau - tau) / (high_tau - low_tau), 0.0, 1.0)
+    return (1 - beta) * x + beta * torch.round(x)

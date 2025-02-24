@@ -34,7 +34,7 @@ I would love to see what you made!
 ## Features
 
 - **Image-to-Model Conversion**: Converts an input image into a layered model suitable for 3D printing.
-- **Learned Optimization**: Optimizes per-pixel height and per-layer material assignments using JAX and Optax.
+- **Learned Optimization**: Optimizes per-pixel height and per-layer material assignments using pytorch.
 - **Gumbel Softmax Sampling**: Leverages the Gumbel softmax method to decide material assignments for each layer.
 - **STL File Generation**: Exports an ASCII STL file based on the optimized height map.
 - **Swap Instructions**: Generates clear swap instructions for changing materials during printing.
@@ -59,22 +59,19 @@ I would love to see what you made!
    ```
 
 3. **Install Dependencies**
-
+  See the [requirements.txt](requirements.txt) file for a complete list of dependencies.
+  
    ```bash
    pip install -r requirements.txt
    ```
-
-See the [requirements.txt](requirements.txt) file for a complete list of dependencies.  
-The optimizer is built using JAX, which benefits from a CUDA-compatible GPU for optimal performance.  
-Without a dedicated GPU the process can take significantly longer (up to 10-20x slower).  
-If you have a GPU, you can install the GPU version of JAX by running:
-
+4. **Install pytorch**
+As jax gpu support is only available under linux (or WSL for Windows),
+this fork is uses pytorch which is fully compatible.
+If you have a GPU, you can install the GPU version of pytorch by running:
 ```bash
-pip install -U "jax[cuda12]"
+pip install torch --index-url https://download.pytorch.org/whl/cu126
 ```
-
-Currently, jax gpu support is only available under linux. \
-If you use Windows, please install WSL2 to use the GPU version of jax.
+Reference: [pytorch.org](https://pytorch.org/get-started/locally/)
 
 ## Usage
 
@@ -141,8 +138,7 @@ Without it, this project would not have been possible.
 
 AutoForge makes use of several open source libraries:
 
-- [JAX](https://github.com/google/jax)
-- [Optax](https://github.com/deepmind/optax)
+- [Pytorch](https://github.com/pytorch/pytorch)
 - [OpenCV](https://opencv.org/)
 - [Matplotlib](https://matplotlib.org/)
 - [Pandas](https://pandas.pydata.org/)
