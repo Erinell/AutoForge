@@ -65,12 +65,12 @@ I would love to see what you made!
    pip install -r requirements.txt
    ```
 4. **Install pytorch**
-As jax gpu support is only available under linux (or WSL for Windows),
-this fork is uses pytorch which is fully compatible.
-If you have a GPU, you can install the GPU version of pytorch by running:
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu126
-```
+  As jax gpu support is only available under linux (or WSL for Windows),
+  this fork is uses pytorch which is fully compatible.
+  If you have a GPU, you can install the GPU version of pytorch by running:
+   ```bash
+   pip install torch --index-url https://download.pytorch.org/whl/cu126
+   ```
 Reference: [pytorch.org](https://pytorch.org/get-started/locally/)
 
 ## Usage
