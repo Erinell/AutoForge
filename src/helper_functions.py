@@ -2,6 +2,7 @@ import json
 import os
 import uuid
 
+from torch import argmax, float64, log, tensor, zeros_like
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -12,9 +13,8 @@ import os
 import json
 import pandas as pd
 import numpy as np
-
 import struct
-
+from src.utils import hex_to_rgb
 
 def generate_stl(height_map, filename, background_height, scale=1.0):
     """
@@ -169,10 +169,22 @@ def initialize_pixel_height_logits(target):
                       0.114 * target[..., 2]) / 255.0
     # To avoid log(0) issues, add a small epsilon.
     eps = 1e-6
-    pixel_height_logits = torch.log((normalized_lum + eps) / (1 - normalized_lum + eps))
+    pixel_height_logits = log((normalized_lum + eps) / (1 - normalized_lum + eps))
     return pixel_height_logits
 
-
+def load_materials(csv_filename, blacklist: list = None):
+    df = pd.read_csv(csv_filename)
+    # df = df[~df[' Name'].isin(blacklist)]
+    # print(df)
+    material_names = [brand + " - " + name for brand, name in zip(df["Brand"].tolist(), df[" Name"].tolist())]
+    material_TDs = (df[' TD'].astype(float)).to_numpy()
+    colors_list = df[' Color'].tolist()
+    # Use float64 for material colors.
+    material_colors = tensor([hex_to_rgb(color) for color in colors_list], dtype=float64)
+    material_TDs = tensor(material_TDs, dtype=float64)
+    
+    return material_colors, material_TDs, material_names, colors_list
+    
 def load_materials_data(csv_filename):
     """
     Load the full material data from the CSV file.
@@ -222,7 +234,7 @@ def extract_filament_swaps(disc_global, disc_height_image, background_layers):
     return filament_indices, slider_values
 
 
-def generate_project_file(project_filename, args, disc_global, disc_height_image,
+def generate_project_file(project_filename, background_color, background_height, layer_height, max_layers, disc_global, disc_height_image,
                           width_mm, height_mm, stl_filename, csv_filename):
     """
     Export a project file containing the printing parameters, including:
@@ -244,7 +256,7 @@ def generate_project_file(project_filename, args, disc_global, disc_height_image
         csv_filename (str): Path to the CSV file containing material data.
     """
     # Compute the number of background layers (as in your main())
-    background_layers = int(args.background_height / args.layer_height)
+    background_layers = int(background_height / layer_height)
 
     # Load full material data from CSV
     material_data = load_materials_data(csv_filename)
@@ -272,7 +284,7 @@ def generate_project_file(project_filename, args, disc_global, disc_height_image
     # add black as the first filament with background height as the first slider value
     filament_set.insert(0, {
             "Brand": "Autoforge",
-            "Color": args.background_color,
+            "Color": background_color,
             "Name": "Background",
             "Owned": False,
             "Transmissivity": 0.1,
@@ -280,7 +292,7 @@ def generate_project_file(project_filename, args, disc_global, disc_height_image
             "uuid": str(uuid.uuid4())
     })
     # add black to slider value
-    slider_values.insert(0, (args.background_height//args.layer_height)-1)
+    slider_values.insert(0, (background_height//layer_height)-1)
 
     # reverse order of filament set
     filament_set = filament_set[::-1]
@@ -288,9 +300,9 @@ def generate_project_file(project_filename, args, disc_global, disc_height_image
     # Build the project file dictionary.
     # Many keys are filled in with default or derived values.
     project_data = {
-        "base_layer_height": args.layer_height,  # you may adjust this if needed
+        "base_layer_height": layer_height,  # you may adjust this if needed
         "blue_shift": 0,
-        "border_height": args.background_height,  # here we use the background height
+        "border_height": background_height,  # here we use the background height
         "border_width": 3,
         "borderless": True,
         "bright_adjust_zero": False,
@@ -314,7 +326,7 @@ def generate_project_file(project_filename, args, disc_global, disc_height_image
         "invert_green": False,
         "invert_red": False,
         "inverted_color_pop": False,
-        "layer_height": args.layer_height,
+        "layer_height": layer_height,
         "legacy_luminance": False,
         "light_intensity": -1,
         "light_temperature": 1,
@@ -325,7 +337,7 @@ def generate_project_file(project_filename, args, disc_global, disc_height_image
         "luminance_offset_max": 100,
         "luminance_power": 2,
         "luminance_weight": 100,
-        "max_depth": args.background_height + args.layer_height * args.max_layers,
+        "max_depth": background_height + layer_height * max_layers,
         "median": 0,
         "mesh_style_edit": True,
         "min_depth": 0.48,
@@ -348,45 +360,6 @@ def generate_project_file(project_filename, args, disc_global, disc_height_image
         json.dump(project_data, f, indent=4)
 
 
-
-def hex_to_rgb(hex_str):
-    """
-    Convert a hex color string to a normalized RGB list.
-
-    Args:
-        hex_str (str): The hex color string (e.g., '#RRGGBB').
-
-    Returns:
-        list: A list of three floats representing the RGB values normalized to [0, 1].
-    """
-    hex_str = hex_str.lstrip('#')
-    return [int(hex_str[i:i+2], 16) / 255.0 for i in (0, 2, 4)]
-
-
-def load_materials(csv_filename):
-    """
-    Load material data from a CSV file.
-
-    Args:
-        csv_filename (str): Path to the hueforge CSV file containing material data.
-
-    Returns:
-        tuple: A tuple containing:
-            - material_colors (Tensor): Array of material colors in float64.
-            - material_TDs (Tensor): Array of material transmission/opacity parameters in float64.
-            - material_names (list): List of material names.
-            - colors_list (list): List of color hex strings.
-    """
-    df = pd.read_csv(csv_filename)
-    material_names = [brand + " - " + name for brand, name in zip(df["Brand"].tolist(), df[" Name"].tolist())]
-    material_TDs = (df[' TD'].astype(float)).to_numpy()
-    colors_list = df[' Color'].tolist()
-    # Use float64 for material colors.
-    material_colors = torch.tensor([hex_to_rgb(color) for color in colors_list], dtype=torch.float64)
-    material_TDs = torch.tensor(material_TDs, dtype=torch.float64)
-    return material_colors, material_TDs, material_names, colors_list
-
-
 def gumbel_softmax(logits, temperature, key, hard=False):
     """
     Compute the Gumbel-Softmax.
@@ -402,96 +375,6 @@ def gumbel_softmax(logits, temperature, key, hard=False):
     
     y = F.softmax((logits + key) / temperature, dim=-1)
     if hard:
-        y_hard = torch.zeros_like(y).scatter_(-1, torch.argmax(y, dim=-1, keepdim=True), 1.0)
+        y_hard = zeros_like(y).scatter_(-1, argmax(y, dim=-1, keepdim=True), 1.0)
         y = y_hard + (y - y_hard).detach()
     return y
-
-
-def srgb_to_linear_lab(rgb):
-    """
-    Convert sRGB (range [0,1]) to linear RGB.
-
-    Args:
-        rgb (Tensor): A Tensor array of shape (..., 3) representing the sRGB values.
-
-    Returns:
-        Tensor: A Tensor array of shape (..., 3) representing the linear RGB values.
-    """
-    return torch.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
-
-
-def linear_to_xyz(rgb_linear):
-    """
-    Convert linear RGB to XYZ using sRGB D65.
-
-    Args:
-        rgb_linear (Tensor): A Tensor array of shape (..., 3) representing the linear RGB values.
-
-    Returns:
-        Tensor: A Tensor array of shape (..., 3) representing the XYZ values.
-    """
-    R = rgb_linear[..., 0]
-    G = rgb_linear[..., 1]
-    B = rgb_linear[..., 2]
-    X = 0.4124564 * R + 0.3575761 * G + 0.1804375 * B
-    Y = 0.2126729 * R + 0.7151522 * G + 0.0721750 * B
-    Z = 0.0193339 * R + 0.1191920 * G + 0.9503041 * B
-    return torch.stack([X, Y, Z], dim=-1)
-
-
-def xyz_to_lab(xyz):
-    """
-    Convert XYZ to CIELAB. Assumes D65 reference white.
-
-    Args:
-        xyz (Tensor): A Tensor array of shape (..., 3) representing the XYZ values.
-
-    Returns:
-        Tensor: A Tensor array of shape (..., 3) representing the CIELAB values.
-    """
-    xyz_ref = torch.tensor([0.95047, 1.0, 1.08883], dtype=xyz.dtype, device=xyz.device)
-    xyz = xyz / xyz_ref
-    delta = 6/29
-    f = torch.where(xyz > delta**3, xyz ** (1/3), (xyz / (3 * delta**2)) + (4/29))
-    L = 116 * f[..., 1] - 16
-    a = 500 * (f[..., 0] - f[..., 1])
-    b = 200 * (f[..., 1] - f[..., 2])
-    return torch.stack([L, a, b], dim=-1)
-
-
-def rgb_to_lab(rgb):
-    """
-    Convert an sRGB image (values in [0,1]) to CIELAB.
-
-    Args:
-        rgb (Tensor): A Tensor array of shape (..., 3) representing the sRGB values.
-
-    Returns:
-        Tensor: A Tensor array of shape (..., 3) representing the CIELAB values.
-    """
-    rgb_linear = srgb_to_linear_lab(rgb)
-    xyz = linear_to_xyz(rgb_linear)
-    lab = xyz_to_lab(xyz)
-    return lab
-
-
-def adaptive_round(x, tau, high_tau=1.0, low_tau=0.01, temp=0.1):
-    """
-    Compute a soft (adaptive) rounding of x.
-
-    When tau is high (>= high_tau) returns x (i.e. no rounding).
-    When tau is low (<= low_tau) returns round(x).
-    In between, linearly interpolates between x and round(x).
-
-    Args:
-        x (jnp.ndarray): The input array to be rounded.
-        tau (float): The temperature parameter controlling the degree of rounding.
-        high_tau (float, optional): The high threshold for tau. Defaults to 1.0.
-        low_tau (float, optional): The low threshold for tau. Defaults to 0.01.
-        temp (float, optional): A temperature parameter for interpolation. Defaults to 0.1.
-
-    Returns:
-        Tensor: The adaptively rounded array.
-    """
-    beta = np.clip((high_tau - tau) / (high_tau - low_tau), 0.0, 1.0)
-    return (1 - beta) * x + beta * torch.round(x)
