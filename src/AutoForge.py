@@ -183,15 +183,22 @@ class AutoForge(QThread):
         Returns:
             tuple: A tuple containing the best parameters and the best composite image.
         """
-        num_materials = material_colors.shape[0]
+        seed = 42
+        torch.manual_seed(seed)
+        generator = torch.Generator()
         
+        num_materials = material_colors.shape[0]
         global_logits = torch.ones((max_layers, num_materials)) * -1.0
         for i in range(max_layers):
             global_logits[i, i % num_materials] = 1.0
-        global_logits += torch.rand(global_logits.shape) * 0.2 - 0.1  # Uniform [-0.1, 0.1]
-
+        global_logits += torch.rand(global_logits.shape, generator=generator) * 0.2 - 0.1  # Uniform [-0.1, 0.1]
+        
+        
+        # generator = torch.Generator()
         # pixel_height_logits = initialize_pixel_height_logits(target).cuda()
         pixel_height_logits = init_height_map(target,max_layers,h).cuda()
+        # pixel_height_logits = torch.rand(global_logits.shape, generator=generator ) * 4 - 2
+         
         params = {
             'global_logits': global_logits.requires_grad_(True),
             'pixel_height_logits': pixel_height_logits.requires_grad_(True)
@@ -229,25 +236,52 @@ class AutoForge(QThread):
         # Determine the checkpoint interval (in iterations) based on percentage progress.
         checkpoint_interval = int(num_iters * save_interval_pct / 100) if save_interval_pct is not None else None
 
+        # val_gumbel_keys_list = []
+        # val_gumbel_keys_images = []
+        # for i in range(3):
+        #     subkeys_tensor = torch.rand(max_layers, generator=generator)
+        #     val_gumbel_keys_list.append(subkeys_tensor)
+        
         tbar = tqdm(range(num_iters), disable=False)
         for i in tbar:
             tau_height = get_tau(i, tau_init=1.0, tau_final=decay_v, decay_rate=decay_rate)
             tau_global = get_tau(i, tau_init=1.0, tau_final=decay_v, decay_rate=decay_rate)
             gumbel_keys = torch.randn(max_layers, num_materials)
+            # gumbel_keys = torch.randn(max_layers, num_materials, generator=generator)
             params, loss = update_step(params, target, tau_height, tau_global, gumbel_keys)
             
             disc_comp = composite_image_combined(params['pixel_height_logits'], params['global_logits'],
-                                                    decay_v, decay_v, gumbel_keys,
-                                                    h, max_layers, material_colors, material_TDs, background,
-                                                    mode="discrete")
-            loss_val = torch.mean((disc_comp - target) ** 2)
+                                        decay_v, decay_v, gumbel_keys,
+                                        h, max_layers, material_colors, material_TDs, background,
+                                        mode="discrete")
+            loss_val = torch.mean((disc_comp - target) ** 2).cuda()
+            # val_loss_list = []
+            # for j in range(3):
+            #     disc_comp = composite_image_combined(params['pixel_height_logits'], params['global_logits'],
+            #                                             decay_v, decay_v, val_gumbel_keys_list[j],
+            #                                             h, max_layers, material_colors, material_TDs, background,
+            #                                             mode="discrete")
+            #     loss_val = torch.mean((disc_comp - target) ** 2).cuda()
+            #     val_loss_list.append(loss_val)
+            #     val_gumbel_keys_images.append(disc_comp)
+                
+            # best_val_loss_idx = torch.argmin(torch.tensor(val_loss_list)).cuda()
+            # loss_val = val_loss_list[best_val_loss_idx]
+            # val_gumbel_keys = val_gumbel_keys_list[best_val_loss_idx]
+            # val_gumbel_keys_list = [val_gumbel_keys]
+            # disc_comp = val_gumbel_keys_images[best_val_loss_idx]
+            # val_gumbel_keys_images = []
+            
+            # for _ in range(9):
+            #     val_gumbel_keys_list.append(torch.rand(max_layers, generator=generator))
+
             if loss_val < best_loss_since_last_save:
                 best_loss_since_last_save = loss_val
-                best_params_since_last_save = {k: v.clone().detach() for k, v in params.items()}
+                best_params_since_last_save = {k: v.clone() for k, v in params.items()}
                 
             if loss_val < best_loss or best_params is None:
                 best_loss = loss_val
-                best_params = {k: v.clone().detach() for k, v in params.items()}
+                best_params = {k: v.clone() for k, v in params.items()}
 
                 comp = composite_image_combined(best_params['pixel_height_logits'], best_params['global_logits'],
                                                     tau_height, tau_global, gumbel_keys,
@@ -262,7 +296,7 @@ class AutoForge(QThread):
                 comp = composite_image_combined(best_params['pixel_height_logits'], best_params['global_logits'],
                                                     tau_height, tau_global, gumbel_keys,
                                                     h, max_layers, material_colors, material_TDs, background, mode="continuous")
-                comp_np = np.clip(comp.cpu().numpy(), 0, 255).astype(np.uint8)
+                comp_np = np.clip(comp.cpu().detach().numpy(), 0, 255).astype(np.uint8)
                 self.signals.comp_im = QImage(comp_np, comp_np.shape[1], comp_np.shape[0], QImage.Format.Format_RGB888)
                 
                 

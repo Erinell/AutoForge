@@ -51,8 +51,14 @@ def composite_pixel_combined(pixel_height_logit, global_logits, tau_height, tau_
         # For material selection, force a one-hot (hard) result when tau_global is very small.
         if mode == "discrete":
             p_i = gumbel_softmax(global_logits[j], tau_global, gumbel_keys[j], hard=True).cuda()
+        elif mode == "continuous":
+            p_i = torch.cond(
+                tau_global < 1e-3,
+                lambda: gumbel_softmax(global_logits[j], tau_global, gumbel_keys[j], hard=True).cuda(),
+                lambda: gumbel_softmax(global_logits[j], tau_global, gumbel_keys[j], hard=False).cuda(),
+            )
         else:
-            p_i = gumbel_softmax(global_logits[j], tau_global, gumbel_keys[j], hard=(tau_global < 1e-3)).cuda()
+            p_i = global_logits[j]
         
         color_i = torch.matmul(p_i, material_colors).cuda()
         TD_i = torch.matmul(p_i, material_TDs).cuda() * 0.1

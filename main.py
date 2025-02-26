@@ -15,6 +15,7 @@ class main(QMainWindow):
         super().__init__(parent)
         self.ui = Ui_main()
         self.ui.setupUi(self)
+        self.setFixedSize(torch.Size(self.width(), self.height()))
         
         self.autoForge = AutoForge(self.ui)
         
@@ -38,6 +39,8 @@ class main(QMainWindow):
         self.ui.currentCompPic.setPixmap(QPixmap.fromImage(data.comp_im))
         self.ui.bestCompPic.setPixmap(QPixmap.fromImage(data.best_comp_im))
         self.ui.heightmapPic.setPixmap(QPixmap.fromImage(data.height_map_im))
+        self.ui.discComPic.setPixmap(QPixmap.fromImage(data.disc_comp_im))
+        
         
     def on_importImage_clicked(self):
         input_image = QFileDialog.getOpenFileUrl(self, "Open Image", "", "Image Files (*.jpg)")

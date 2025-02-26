@@ -7,8 +7,11 @@ to assign materials per layer and produce both a discretized composite that
 is exported as an STL file along with swap instructions.
 """
 import torch
+from tqdm import tqdm
 
+from src.composite import composite_image_combined
 from src.helper_functions import gumbel_softmax
+import torch.nn.functional as F
 
 def create_update_step(optimizer, loss_function, h, max_layers, material_colors, material_TDs, background):
     """
@@ -72,8 +75,32 @@ def discretize_solution_pytorch(params, tau_global, gumbel_keys, h, max_layers):
     discrete_height_image = torch.clamp(discrete_height_image, 0, max_layers)
 
     def discretize_layer(logits, key):
-        p = gumbel_softmax(logits, tau_global, key, hard=True)
+        p = F.gumbel_softmax(logits, tau=tau_global, hard=True) # gumbel_softmax(logits, tau_global, key, hard=True)
         return torch.argmax(p)
 
     discrete_global = torch.stack([discretize_layer(global_logits[i], gumbel_keys[i]) for i in range(max_layers)])
     return discrete_global.cpu().numpy(), discrete_height_image.cpu().numpy()
+
+def gumbal_bruteforce(background, best_params, decay_v_value, h_value, material_TDs, material_colors, max_layers_value,
+                      rng_key, target, val_gumbel_keys, iterations=10000, desc="Searching Gumbal Keys"):
+    disc_comp = composite_image_combined(best_params['pixel_height_logits'], best_params['global_logits'],
+                                             decay_v_value, decay_v_value, val_gumbel_keys,
+                                             h_value, max_layers_value, material_colors, material_TDs, background,
+                                             mode="discrete")
+    opt_loss = torch.mean((disc_comp - target) ** 2)
+    print(f"Initial gumbal search loss: {opt_loss}")
+    tbar = tqdm(range(iterations), desc=f"{desc} with lowest loss: {opt_loss}")
+    
+    for _ in tbar:
+        gumbel_keys_disc = [torch.Generator() for i in range(max_layers_value)]
+        
+        disc_comp = composite_image_combined(best_params['pixel_height_logits'], best_params['global_logits'],
+                                                 decay_v_value, decay_v_value, gumbel_keys_disc,
+                                                 h_value, max_layers_value, material_colors, material_TDs, background,
+                                                 mode="discrete")
+        new_loss = torch.mean((disc_comp - target) ** 2)
+        if new_loss < opt_loss:
+            opt_loss = new_loss
+            val_gumbel_keys = gumbel_keys_disc
+            tbar.set_description(f"{desc} with lowest loss: {opt_loss}")
+    return val_gumbel_keys
